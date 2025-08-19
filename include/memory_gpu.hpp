@@ -45,7 +45,9 @@ struct MemoryConfig {
     prop_bytes(prop_bytes)
   {
     int maxSharedMemPerSM;
-    cudaDeviceGetAttribute(&maxSharedMemPerSM, cudaDevAttrMaxSharedMemoryPerMultiprocessor, 0);
+    int dev = 0;
+    cudaGetDevice(&dev);
+    cudaDeviceGetAttribute(&maxSharedMemPerSM, cudaDevAttrMaxSharedMemoryPerMultiprocessor, dev);
     cudaFuncAttributes attr;
     cudaFuncGetAttributes(&attr, kernel);
     if(verbose >= 1) {
@@ -138,6 +140,7 @@ size_t gpu_sizeof() {
 void check_support_managed_memory() {
   int attr = 0;
   int dev = 0;
+  cudaGetDevice(&dev);
   CUDAEX(cudaDeviceGetAttribute(&attr, cudaDevAttrManagedMemory, dev));
   if (!attr) {
     std::cerr << "The GPU does not support managed memory." << std::endl;
@@ -148,6 +151,7 @@ void check_support_managed_memory() {
 void check_support_concurrent_managed_memory() {
   int attr = 0;
   int dev = 0;
+  cudaGetDevice(&dev);
   CUDAEX(cudaDeviceGetAttribute(&attr, cudaDevAttrConcurrentManagedAccess, dev));
   if (!attr) {
 #ifdef NO_CONCURRENT_MANAGED_MEMORY

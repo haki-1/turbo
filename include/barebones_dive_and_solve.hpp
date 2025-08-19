@@ -66,6 +66,9 @@ struct UnifiedData {
   /** The memory configuration of each block. */
   MemoryConfig mem_config;
 
+  int bound_GPU = INT_MAX;
+  int bound_CPU = INT_MAX;
+
   UnifiedData(const CP<Itv>& cp, MemoryConfig mem_config)
    : root(GridCP::tag_gpu_block_copy{}, false, cp)
    , stop(false)
@@ -758,6 +761,8 @@ __global__ void gpu_barebones_solve(UnifiedData* unified_data, GridData* grid_da
               Itv(Itv::LB::top(), Itv::UB(grid_data->appx_best_bound.value() - 1)));
             block_data.store->embed(grid_data->obj_var,
               Itv(Itv::LB::top(), Itv::UB(block_data.best_bound.value() - 1)));
+            block_data.store->embed(grid_data->obj_var,
+              Itv(Itv::LB::top(), Itv::UB(unified_data->bound_CPU - 1)));            
           }
           // Unconstrained objective, can terminate, we will not find a better solution.
           if(grid_data->appx_best_bound.is_bot()) {
@@ -999,6 +1004,7 @@ __device__ INLINE void propagate(UnifiedData& unified_data, GridData& grid_data,
           block_data.best_bound.meet(Itv::UB(block_data.store->project(grid_data.obj_var).lb().value()));
           grid_data.appx_best_bound.meet(block_data.best_bound);
           block_data.stats.timers.update_timer(Timer::LATEST_BEST_OBJ_FOUND, block_data.start_time);
+          unified_data.bound_GPU = grid_data.appx_best_bound.value();
         }
         block_data.store->copy_to(group, *block_data.best_store);
         if(threadIdx.x == 0) {

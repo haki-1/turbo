@@ -18,7 +18,8 @@ enum class Arch {
   CPU,
   GPU,
   BAREBONES,
-  HYBRID
+  HYBRID,
+  MULTI_GPU_BAREBONES
 };
 
 enum class FixpointKind {
@@ -48,6 +49,7 @@ struct Configuration {
   size_t timeout_ms;
   size_t or_nodes;
   size_t subproblems_power;
+  int mpi_subproblems;
   size_t stack_kb;
   Arch arch;
   FixpointKind fixpoint;
@@ -73,6 +75,7 @@ struct Configuration {
     timeout_ms(0),
     or_nodes(0),
     subproblems_power(SUBPROBLEMS_POWER),
+    mpi_subproblems(-1),
     stack_kb(
       #ifdef TURBO_IPC_ABSTRACT_DOMAIN
         32
@@ -121,6 +124,7 @@ struct Configuration {
     timeout_ms(other.timeout_ms),
     or_nodes(other.or_nodes),
     subproblems_power(other.subproblems_power),
+    mpi_subproblems(other.mpi_subproblems),
     stack_kb(other.stack_kb),
     arch(other.arch),
     fixpoint(other.fixpoint),
@@ -148,6 +152,7 @@ struct Configuration {
     timeout_ms = other.timeout_ms;
     or_nodes = other.or_nodes;
     subproblems_power = other.subproblems_power;
+    mpi_subproblems = other.mpi_subproblems;
     stack_kb = other.stack_kb;
     arch = other.arch;
     fixpoint = other.fixpoint;
@@ -175,6 +180,7 @@ struct Configuration {
     }
     if(arch != Arch::CPU) {
       printf("-arch %s -or %" PRIu64 " -sub %" PRIu64 " -stack %" PRIu64 " ", name_of_arch(arch), or_nodes, subproblems_power, stack_kb);
+      if (arch == Arch::MULTI_GPU_BAREBONES) { printf("-mpi_sub %d ", mpi_subproblems); }
       if(only_global_memory) { printf("-globalmem "); }
     }
     else {
@@ -221,6 +227,8 @@ struct Configuration {
         return "barebones";
       case Arch::HYBRID:
         return "hybrid";
+      case Arch::MULTI_GPU_BAREBONES:
+        return "multi_gpu_barebones";
       default:
         assert(0);
         return "Unknown";

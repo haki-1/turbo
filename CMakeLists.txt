@@ -26,6 +26,7 @@ option(NO_CONCURRENT_MANAGED_MEMORY "Add support for platform not supporting con
 option(TURBO_BUILD_DOC "Build the documentation of Turbo." OFF)
 option(TURBO_IPC_ABSTRACT_DOMAIN "Use the interval propagator completion (PC) abstract domain instead of PIR." OFF)
 option(TURBO_NO_ENTAILED_PROP_REMOVAL "Do not remove the entailed propagators." ON)
+option(MULTI_GPU_WITH_MPI "Enable multi-GPU execution with MPI (requires GPU=ON)" ON)
 
 if(MSVC)
   set(WITH_XCSP3PARSER OFF)  # XCSP3-CPP-Parser has dependencies on gcc that break MSVC
@@ -64,6 +65,10 @@ endif()
 
 FetchContent_MakeAvailable(lala_parsing lala_pc lala_power)
 
+if(GPU AND MULTI_GPU_WITH_MPI)
+  find_package(MPI REQUIRED)
+endif()
+
 # Turbo executable
 
 if(GPU)
@@ -72,6 +77,9 @@ endif()
 
 add_executable(turbo src/turbo.cpp src/config.cpp)
 target_include_directories(turbo PRIVATE include)
+if(GPU AND MULTI_GPU_WITH_MPI)
+  target_include_directories(turbo PRIVATE ${MPI_INCLUDE_PATH})
+endif()
 target_compile_options(turbo PRIVATE
     "$<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CUDA_COMPILER_ID:NVIDIA>>:SHELL:--ptxas-options=-v>"
     "$<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CUDA_COMPILER_ID:NVIDIA>>:--keep$<$<BOOL:${TURBO_VERBOSE}>:;--verbose>>"
@@ -108,7 +116,14 @@ if(NO_CONCURRENT_MANAGED_MEMORY)
   target_compile_definitions(turbo PRIVATE NO_CONCURRENT_MANAGED_MEMORY)
 endif()
 
+if(GPU AND MULTI_GPU_WITH_MPI)
+  target_compile_definitions(turbo PRIVATE MULTI_GPU_WITH_MPI)
+endif()
+
 target_link_libraries(turbo PRIVATE lala_parsing lala_pc lala_power)
+if(GPU AND MULTI_GPU_WITH_MPI)
+  target_link_libraries(turbo PRIVATE MPI::MPI_CXX)
+endif()
 target_link_options(turbo PRIVATE
     $<$<AND:$<BOOL:${WITH_ASAN}>,$<CXX_COMPILER_ID:GNU>>:-fsanitize=address;-static-libasan>
     $<$<AND:$<BOOL:${WITH_ASAN}>,$<CXX_COMPILER_ID:Clang>>:-fsanitize=address>

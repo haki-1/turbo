@@ -374,7 +374,7 @@ public:
       store->extract(*best);
       best->join_top();
     }
-    if(config.arch == Arch::BAREBONES) {
+    if(config.arch == Arch::BAREBONES || config.arch == Arch::MULTI_GPU_BAREBONES) {
       if(bab->is_minimization()) {
         minimize_obj_var = bab->objective_var();
       }
@@ -596,7 +596,7 @@ public:
     FormulaPtr f_ptr = parse_cn();
     stats.print_stat("abstract_domain", name_of_abstract_domain());
     stats.print_stat("entailed_prop_removal", name_of_entailed_removal());
-    if(config.arch == Arch::BAREBONES) {
+    if(config.arch == Arch::BAREBONES || config.arch == Arch::MULTI_GPU_BAREBONES) {
       auto max_var = find_maximize_var(*f_ptr);
       if(max_var.has_value()) {
         auto max_var_decl = find_existential_of(*f_ptr, max_var.value());

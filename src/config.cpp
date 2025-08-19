@@ -9,7 +9,7 @@
 #include <algorithm>
 
 void usage_and_exit(const std::string& program_name) {
-  std::cout << "usage: " << program_name << " [-t 2000] [-a] [-n 10] [-i] [-f] [-s] [-v] [-p <i>] [-arch <cpu|hybrid|gpu|barebones>] [-p 48] [-or 48] [-sub 12] [-stack 100] [-fp <ac1|wac1>] [-wac1_threshold 0] [-eps_var_order <input_order|first_fail|anti_first_fail|smallest|largest>] [-eps_value_order <min|max|split|reverse_split>] [-network_analysis] [-cutnodes 0] [-disable_simplify] [-force_ternarize] [-globalmem] [-version 1.0.0] [xcsp3instance.xml | fzninstance.fzn]" << std::endl;
+  std::cout << "usage: " << program_name << " [-t 2000] [-a] [-n 10] [-i] [-f] [-s] [-v] [-p <i>] [-arch <cpu|hybrid|gpu|barebones|multi_gpu_barebones>] [-p 48] [-or 48] [-sub 12] [-stack 100] [-fp <ac1|wac1>] [-wac1_threshold 0] [-eps_var_order <input_order|first_fail|anti_first_fail|smallest|largest>] [-eps_value_order <min|max|split|reverse_split>] [-network_analysis] [-cutnodes 0] [-mpi_sub 60] [-disable_simplify] [-force_ternarize] [-globalmem] [-version 1.0.0] [xcsp3instance.xml | fzninstance.fzn]" << std::endl;
   std::cout << "\t-t 2000: Run the solver with a timeout of 2000 milliseconds." << std::endl;
   std::cout << "\t-timeout 2000: Same as -t, but if both -t and -timeout are specified, -timeout overrides -t." << std::endl;
   std::cout << "\t-a: Instructs the solver to report all solutions in the case of satisfaction problems, or print intermediate solutions of increasing quality in the case of optimisation problems." << std::endl;
@@ -20,7 +20,7 @@ void usage_and_exit(const std::string& program_name) {
   std::cout << "\t-v: Print log messages (verbose solving) to the standard error stream." << std::endl;
   std::cout << "\t-ast: Print the AST of the model (useful to debug)." << std::endl;
   std::cout << "\t-p 48: On CPU, run with 48 parallel threads. On GPU, equivalent to `-or 48`." << std::endl;
-  std::cout << "\t-arch <cpu|gpu|hybrid|barebones>: Choose the architecture on which the problem will be solved." << std::endl;
+  std::cout << "\t-arch <cpu|gpu|hybrid|barebones|multi_gpu_barebones>: Choose the architecture on which the problem will be solved." << std::endl;
   std::cout << "\t-fp <ac1|wac1>: Choose the fixpoint strategy (default: ac1 on CPU, wac1 on GPU):" << std::endl;
   std::cout << "\t\t ac1: All propagators are executed in parallel at each iteration." << std::endl;
   std::cout << "\t\t wac1: Behave as ac1 when the number of active propagators is less than wac1_threshold. Otherwise,  each warp must reach a local fixpoint before executing the next 32 propagators (not compatible with -arch cpu)." << std::endl;
@@ -34,6 +34,7 @@ void usage_and_exit(const std::string& program_name) {
   std::cout << "\t-version 1.0.0: A version identifier that is printed as statistics to know which version of Turbo was used to solve an instance. It is only for documentation and replicability purposes." << std::endl;
   std::cout << "\t-hardware \"Intel Core i9-10900X@3.7GHz;24GO DDR4;NVIDIA RTX A5000\": The description of the hardware on which the solver is executed (\"CPU;RAM;GPU\"). It is only for documentation and replicability purposes." << std::endl;
   std::cout << "\t-cutnodes 1000: Stop the solver when 1000 nodes have been explored in a subproblem (0 for no limit)." << std::endl;
+  std::cout << "\t-mpi_sub 60: Create at least 60 subproblems to be solved in turns by the GPUs (embarrasingly parallel search). The special value `-1` leaves Turbo to decide on the number of subproblems (at least 30 * GPUs). Default: -mpi_sub -1. (only for multi_gpu_barebones architecture)" << std::endl;
   std::cout << "Benchmarking options (should normally not be used):" << std::endl;
   std::cout << "\t-force_ternarize: Force the transformation of the formula in ternary normal form, even with IPC abstract domain (note that it is enabled by default with PIR abstract domain)." << std::endl;
   std::cout << "\t-disable_simplify: Disable the simplification step." << std::endl;
@@ -139,6 +140,7 @@ Configuration<battery::standard_allocator> parse_args(int argc, char** argv) {
   input.read_size_t("-stack", config.stack_kb);
   input.read_size_t("-n", config.stop_after_n_solutions);
   input.read_size_t("-cutnodes", config.stop_after_n_nodes);
+  input.read_int("-mpi_sub", config.mpi_subproblems);
   input.read_bool("-i", config.print_intermediate_solutions);
   bool all_sols;
   input.read_bool("-a", all_sols);
@@ -169,6 +171,9 @@ Configuration<battery::standard_allocator> parse_args(int argc, char** argv) {
     }
     else if(architecture == "barebones") {
       config.arch = Arch::BAREBONES;
+    }
+    else if(architecture == "multi_gpu_barebones") {
+      config.arch = Arch::MULTI_GPU_BAREBONES;
     }
     else {
       std::cerr << "Unknown architecture -arch " << architecture << std::endl;
