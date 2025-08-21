@@ -143,6 +143,9 @@ struct BlockData {
   /** A timer used for computing time statistics. */
   cuda::std::chrono::system_clock::time_point timer;
 
+  /** A timer used for computing diving VS search time statistics. */
+  cuda::std::chrono::system_clock::time_point dive_timer;
+
   /** The time at which the kernel was started, useful to compute the time of the best bound. */
   cuda::std::chrono::system_clock::time_point start_time;
 
@@ -192,6 +195,7 @@ struct BlockData {
     int currentDepth = depth;
     for(int i = current_strategy; i < strategies.size(); ++i) {
       switch(strategies[i].var_order) {
+        case VariableOrder::RANDOM:
         case VariableOrder::INPUT_ORDER: {
           input_order_split(has_changed, idx, strategies[i]);
           break;
@@ -518,15 +522,15 @@ void barebones_dive_and_solve(const Configuration<battery::standard_allocator>& 
 
 /** We configure the GPU according to the user configuration:
  * 1) Guess the "best" number of blocks per SM, if not provided.
- * 2) Configure the size of the shared memory.
- * 3) Increase the global heap memory.
- * 4) Increase the stack size if requested by the user.
+ * 2) Update the number of subproblems to at least "30 * B" where B is the number of blocks.
+ * 3) Configure the size of the shared memory.
+ * 4) Increase the global heap memory.
+ * 5) Increase the stack size if requested by the user.
  */
 MemoryConfig configure_gpu_barebones(CP<Itv>& cp) {
   auto& config = cp.config;
 
   /** I. Number of blocks per SM. */
-
   cudaDeviceProp deviceProp;
   cudaGetDeviceProperties(&deviceProp, 0);
   int max_block_per_sm;
@@ -544,51 +548,44 @@ MemoryConfig configure_gpu_barebones(CP<Itv>& cp) {
     cp.stats.num_blocks = max_block_per_sm * deviceProp.multiProcessorCount;
   }
 
-  /** II. Configure the shared memory size. */
-  size_t store_bytes = gpu_sizeof<IStore>() + gpu_sizeof<abstract_ptr<IStore>>() + cp.store->vars() * gpu_sizeof<Itv>();
-  size_t iprop_bytes = gpu_sizeof<IProp>() + gpu_sizeof<abstract_ptr<IProp>>() + cp.iprop->num_deductions() * gpu_sizeof<bytecode_type>() + gpu_sizeof<typename IProp::bytecodes_type>();
-  // If large problem, minimal amount of blocks.
-  if(cp.iprop->num_deductions() + cp.store->vars() > 1000000) {
-    cp.stats.num_blocks = deviceProp.multiProcessorCount;
-    printf("%% WARNING: Large problem detected, reducing to 1 block per SM.\n");
+  /** II. Number of subproblems. */
+  cp.stats.print_stat("subproblems_power", cp.config.subproblems_power);
+  if(cp.config.subproblems_power == -1) {
+    cp.config.subproblems_power = 0;
+    while((1 << cp.config.subproblems_power) < cp.config.subproblems_factor * cp.stats.num_blocks) {
+      cp.config.subproblems_power++;
+    }
   }
-  int blocks_per_sm = (cp.stats.num_blocks + deviceProp.multiProcessorCount - 1) / deviceProp.multiProcessorCount;
-  MemoryConfig mem_config;
-  if(config.only_global_memory) {
-    mem_config = MemoryConfig(store_bytes, iprop_bytes);
-  }
-  else {
-    mem_config = MemoryConfig((void*) gpu_barebones_solve, config.verbose_solving, blocks_per_sm, store_bytes, iprop_bytes);
-  }
-  mem_config.print_mzn_statistics(config, cp.stats);
 
   /** III. Size of the heap global memory.
    * The estimation is very conservative, normally we should not run out of memory.
    * */
-  size_t nblocks = static_cast<size_t>(cp.stats.num_blocks);
+  size_t store_bytes = gpu_sizeof<IStore>() + gpu_sizeof<abstract_ptr<IStore>>() + cp.store->vars() * gpu_sizeof<Itv>();
+  size_t iprop_bytes = gpu_sizeof<IProp>() + gpu_sizeof<abstract_ptr<IProp>>() + cp.iprop->num_deductions() * gpu_sizeof<bytecode_type>() + gpu_sizeof<typename IProp::bytecodes_type>();
+  size_t mem_per_block = gpu_sizeof<BlockData>()
+    + store_bytes * size_t{3}  // current, root, best.
+    + store_bytes * size_t{2}  // search strategies
+    + iprop_bytes * size_t{2}
+    + cp.iprop->num_deductions() * size_t{4} * gpu_sizeof<int>()  // fixpoint engine
+    + (gpu_sizeof<int>() + gpu_sizeof<LightBranch<Itv>>()) * size_t{MAX_SEARCH_DEPTH};
   size_t estimated_global_mem = gpu_sizeof<UnifiedData>() + store_bytes * size_t{5} + iprop_bytes +
-    gpu_sizeof<GridData>() +
-    nblocks * gpu_sizeof<BlockData>() +
-    nblocks * store_bytes * size_t{3} + // current, root, best.
-    nblocks * iprop_bytes * size_t{2} +
-    nblocks * cp.iprop->num_deductions() * size_t{4} * gpu_sizeof<int>()  + // fixpoint engine
-    nblocks * (gpu_sizeof<int>() + gpu_sizeof<LightBranch<Itv>>()) * size_t{MAX_SEARCH_DEPTH};
-  size_t required_global_mem = std::max(deviceProp.totalGlobalMem / 2, estimated_global_mem);
-  if(estimated_global_mem > deviceProp.totalGlobalMem / 2) {
-    printf("%% WARNING: The estimated global memory is larger than half of the total global memory.\n\
-    We reduce the number of blocks to avoid running out of memory.\n");
-    cp.stats.num_blocks = deviceProp.multiProcessorCount;
+    gpu_sizeof<GridData>();
+
+  size_t mem_for_blocks = deviceProp.totalGlobalMem - estimated_global_mem - (deviceProp.totalGlobalMem / 100 * 10);
+  cp.stats.num_blocks = std::max(size_t{1}, std::min(mem_for_blocks / mem_per_block, static_cast<size_t>(cp.stats.num_blocks)));
+  estimated_global_mem += cp.stats.num_blocks * mem_per_block;
+  if(estimated_global_mem > deviceProp.totalGlobalMem / 100 * 90) {
+    printf("%% WARNING: The estimated global memory is larger than 90%% of the total global memory.\n\
+%% It is possible to run out of memory during solving.\n");
   }
-  CUDAEX(cudaDeviceSetLimit(cudaLimitMallocHeapSize, required_global_mem));
-  cp.stats.print_memory_statistics(cp.config.verbose_solving, "heap_memory", required_global_mem);
-  if(cp.config.verbose_solving) {
-    printf("%% estimated_global_mem=%zu\n", estimated_global_mem);
-    printf("%% num_blocks=%d\n", cp.stats.num_blocks);
-  }
-  if(deviceProp.totalGlobalMem < required_global_mem) {
-    printf("%% WARNING: The total global memory available is less than the required global memory.\n\
-    As our memory estimation is very conservative, it might still work, but it is not guaranteed.\n");
-  }
+  CUDAEX(cudaDeviceSetLimit(cudaLimitMallocHeapSize, deviceProp.totalGlobalMem / 100 * 97));
+  cp.stats.print_memory_statistics(cp.config.verbose_solving, "heap_memory", estimated_global_mem);
+  cp.stats.print_memory_statistics(cp.config.verbose_solving, "mem_per_block", mem_per_block);
+  cp.stats.print_memory_statistics(cp.config.verbose_solving, "total_global_mem_bytes", deviceProp.totalGlobalMem);
+
+  // We still need to improve this, for some large problems, it is required to avoid running out of memory.
+  cp.stats.num_blocks = std::min(cp.stats.num_blocks, 200000000 / cp.store->vars());
+  cp.stats.print_stat("num_blocks", cp.stats.num_blocks);
 
   /** IV. Increase the stack if requested by the user. */
   if(config.stack_kb != 0) {
@@ -597,6 +594,17 @@ MemoryConfig configure_gpu_barebones(CP<Itv>& cp) {
     size_t total_stack_size = deviceProp.multiProcessorCount * deviceProp.maxThreadsPerMultiProcessor * config.stack_kb * 1000;
     cp.stats.print_memory_statistics(cp.config.verbose_solving, "stack_memory", total_stack_size);
   }
+
+  /** V. Configure the shared memory size. */
+  int blocks_per_sm = std::max(1, (cp.stats.num_blocks + deviceProp.multiProcessorCount - 1) / deviceProp.multiProcessorCount);
+  MemoryConfig mem_config;
+  if(config.only_global_memory) {
+    mem_config = MemoryConfig(store_bytes, iprop_bytes);
+  }
+  else {
+    mem_config = MemoryConfig((void*) gpu_barebones_solve, config.verbose_solving, blocks_per_sm, store_bytes, iprop_bytes);
+  }
+  mem_config.print_mzn_statistics(config, cp.stats);
   return mem_config;
 }
 
@@ -667,19 +675,13 @@ __global__ void gpu_barebones_solve(UnifiedData* unified_data, GridData* grid_da
     __syncthreads();
 
     // D. Dive into the search tree until we reach the target subproblem.
-
     remaining_depth = config.subproblems_power;
     if(threadIdx.x == 0) {
+      block_data.dive_timer = block_data.stats.start_timer_device();
       is_leaf_node = false;
     }
     __syncthreads();
     while(remaining_depth > 0 && !is_leaf_node && !stop) {
-      // __syncthreads();
-      // if(threadIdx.x == 0) {
-      //   printf("[dive] %d: ", remaining_depth);
-      //   block_data.store->print();
-      //   printf("unified_data: "); unified_data->root.store->print(); printf("\n");
-      // }
       __syncthreads();
       propagate(*unified_data, *grid_data, block_data, fp_engine, stop, has_changed, is_leaf_node);
       __syncthreads();
@@ -710,7 +712,9 @@ __global__ void gpu_barebones_solve(UnifiedData* unified_data, GridData* grid_da
       }
       __syncthreads();
     }
-
+    if(threadIdx.x == 0) {
+      block_data.stats.stop_timer(Timer::DIVE, block_data.dive_timer);
+    }
     // E. Skip subproblems that are not reachable.
 
     /** If we reached a leaf node before the subproblem was reached, then it means a whole subtree should be skipped. */
@@ -801,11 +805,6 @@ __global__ void gpu_barebones_solve(UnifiedData* unified_data, GridData* grid_da
             if(threadIdx.x == 0 && config.verbose_solving >= 1) { printf("%% WARNING: infinite element detected during branching, search is not exhaustive\n");}
           }
           else if(threadIdx.x == 0) {
-            // depth == 1 for root node because we just increased it in `block_data.split`.
-            // if(block_data.depth == 1) {
-            //   block_data.snapshot_root_strategy = block_data.current_strategy;
-            //   block_data.snapshot_next_unassigned_var = block_data.next_unassigned_var;
-            // }
             // Apply the decision.
             // printf("split on %d (", block_data.decisions[block_data.depth-1].var.vid()); block_data.store->project(block_data.decisions[block_data.depth-1].var).print(); printf(")\n");
             block_data.store->embed(block_data.decisions[block_data.depth-1].var, block_data.decisions[block_data.depth-1].next());
@@ -816,10 +815,6 @@ __global__ void gpu_barebones_solve(UnifiedData* unified_data, GridData* grid_da
         // IV. Backtracking
 
         if(is_leaf_node) {
-
-          // if(threadIdx.x == 0) {
-          //   printf("backtracking\n");
-          // }
           // Leaf node at root.
           if(block_data.depth == 0) {
             break;
@@ -894,11 +889,13 @@ __global__ void gpu_barebones_solve(UnifiedData* unified_data, GridData* grid_da
     }
     __syncthreads();
   }
-  if(threadIdx.x == 0 && block_data.stats.nodes < config.stop_after_n_nodes
-      && !unified_data->stop.test())
+  if(threadIdx.x == 0)
   {
-    block_data.stats.num_blocks_done = 1;
+    if(block_data.stats.nodes < config.stop_after_n_nodes && !unified_data->stop.test()) {
+      block_data.stats.num_blocks_done = 1;
+    }
     block_data.stats.timers.update_timer(Timer::FIRST_BLOCK_IDLE, block_data.start_time);
+    block_data.stats.cumulative_time_block = block_data.stats.timers.time_of(Timer::FIRST_BLOCK_IDLE);
   }
   __syncthreads();
 #ifndef TURBO_NO_ENTAILED_PROP_REMOVAL

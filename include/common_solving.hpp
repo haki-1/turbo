@@ -8,6 +8,7 @@
 #include <chrono>
 #include <thread>
 #include <csignal>
+#include <random>
 
 #include "config.hpp"
 #include "statistics.hpp"
@@ -246,9 +247,11 @@ struct AbstractDomains {
   , best(basic_allocator)
   , bab(basic_allocator)
   {
-    size_t num_subproblems = 1;
-    num_subproblems <<= config.subproblems_power;
-    stats.eps_num_subproblems = num_subproblems;
+    if(config.subproblems_power != -1) {
+      size_t num_subproblems = 1;
+      num_subproblems <<= config.subproblems_power;
+      stats.eps_num_subproblems = num_subproblems;
+    }
   }
 
   AbstractDomains(AbstractDomains&& other) = default;
@@ -542,7 +545,9 @@ public:
       }
       has_changed |= simplifier->algebraic_simplify(tnf, local_preprocessing_stats);
       simplifier->eliminate_entailed_constraints(*iprop, tnf, local_preprocessing_stats);
-      has_changed |= simplifier->i_cse(tnf, local_preprocessing_stats);
+      if(num_vars < 1000000) { // otherwise ICSE is too slow, needs to be improved.
+        has_changed |= simplifier->i_cse(tnf, local_preprocessing_stats);
+      }
       if(has_changed) {
         simplifier->meet_equivalence_classes();
         local_preprocessing_stats.print(stats, preprocessing_fixpoint_iterations);
@@ -617,6 +622,8 @@ public:
       preprocess_tcn(*f_ptr);
     }
     push_eps_strategy();
+    std::mt19937 random_generator(config.seed);
+    split->shuffle_random_strategies(random_generator);
     if(config.network_analysis) {
       if constexpr(use_ipc) {
         printf("%% WARNING: -network_analysis option is only valid with the PIR abstract domain.\n");
