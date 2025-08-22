@@ -439,7 +439,7 @@ void eps_barebones_dive_and_solve(const Configuration<battery::standard_allocato
 
   /** Number of MPI subproblems. */
   if(cp.config.mpi_subproblems == -1) {
-    cp.config.mpi_subproblems = 30 * size;
+    cp.config.mpi_subproblems = cp.config.subproblems_factor * size;
   }
   printf("%%%%%%cp.config.mpi_subproblems=%d\n", cp.config.mpi_subproblems);
 
@@ -490,6 +490,7 @@ void eps_barebones_dive_and_solve(const Configuration<battery::standard_allocato
       ++oks;
       solve(subproblem, start, counter_win, best_win, current_subproblem_idx, node_leader_rank, peers_ranks, gen);
 
+      local_best_cp_2.stats.eps_num_subproblems = 1 << subproblem.config.subproblems_power;
       local_best_cp_2.stats.timers.time_of(Timer::FIRST_BLOCK_IDLE) = 0;
       // we don't need to check if the objective is better because if it is not it won't be found because of restricton of the domain
       if(local_best_cp_2.stats.timers.time_of(Timer::LATEST_BEST_OBJ_FOUND) < subproblem.stats.timers.time_of(Timer::LATEST_BEST_OBJ_FOUND)) {
